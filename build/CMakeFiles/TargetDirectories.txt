@@ -1,0 +1,4 @@
+/home/isaia/uni/Sistemi_Operativi/project/SHA256/build/CMakeFiles/client.dir
+/home/isaia/uni/Sistemi_Operativi/project/SHA256/build/CMakeFiles/server.dir
+/home/isaia/uni/Sistemi_Operativi/project/SHA256/build/CMakeFiles/edit_cache.dir
+/home/isaia/uni/Sistemi_Operativi/project/SHA256/build/CMakeFiles/rebuild_cache.dir
