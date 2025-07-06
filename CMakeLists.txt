@@ -16,4 +16,4 @@ add_executable(client src/client.c src/errExit.c)
 target_link_libraries(client ${OPENSSL_LIBRARIES})
 
 add_executable(server src/server.c src/errExit.c)
-target_link_libraries(server ${OPENSSL_LIBRARIES})
+target_link_libraries(server ${OPENSSL_LIBRARIES} pthread)

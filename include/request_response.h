@@ -3,10 +3,12 @@
 
 #include <sys/types.h>
 
+#define PATH_MAX 100
+
 struct Request
-{                       /* Request (client --> server) */
-    pid_t cPid;         /* PID of client               */
-    char pathname[100]; /* pathname of the file        */
+{                            /* Request (client --> server) */
+    pid_t cPid;              /* PID of client               */
+    char pathname[PATH_MAX]; /* pathname of the file        */
 };
 
 struct Response
