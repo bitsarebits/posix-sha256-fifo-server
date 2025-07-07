@@ -98,11 +98,10 @@ int main(int argc, char *argv[])
 // Handles client termination: removes the client FIFO and exits the process.
 void quit(int sig)
 {
-    // Remove the client FIFO from the file system if it exists
+    // Remove the client FIFO from the file system (ignore errors if it does not exist)
     char path2ClientFIFO[25];
     sprintf(path2ClientFIFO, "%s%d", baseClientFIFO, getpid());
-    if (unlink(path2ClientFIFO) != 0)
-        errExit("unlink failed");
+    unlink(path2ClientFIFO);
 
     // Terminate the process
     _exit(0);
