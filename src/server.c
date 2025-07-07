@@ -155,7 +155,7 @@ void *worker_thread(void *arg)
         pthread_mutex_unlock(&list_mutex);
 
         // Compute SHA256 for the requested file
-        printf("<Server>Worker %ld: computing SHA256 for %s\n",
+        printf("<Server> Worker %ld: computing SHA256 for %s\n",
                pthread_self(), req->pathname);
 
         uint8_t hash[32];
@@ -302,6 +302,7 @@ int main(int argc, char *argv[])
             errExit("pthread_create: failed to create worker thread");
     }
 
+    sleep(30);
     // Read requests from the FIFO and update the request list for worker threads
     struct Request request;
     int bR = -1;
