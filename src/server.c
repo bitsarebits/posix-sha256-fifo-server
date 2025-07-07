@@ -12,22 +12,51 @@
 #include "errExit.h"
 #include "request_response.h"
 
-// FIFO path to handle the sha requests
-char *path2ServerFIFO = "/tmp/fifo_server_SHA256";
-char *baseClientFIFO = "/tmp/fifo_client_SHA256."; // to complete with the processID
+// Function prototypes
 
-// FIFO's file descriptor
+/**
+ * Insert a new request into the request list.
+ * If a request for the same file (same path and mtime) already exists,
+ * only add the client to the waiting clients list.
+ */
+void update_request_list(struct Request *request);
+
+/**
+ * Function executed by worker threads.
+ * Takes requests from the list, computes SHA256, and sends the response to clients.
+ */
+void *worker_thread(void *arg);
+
+/**
+ * Handles server termination: closes and removes the FIFO, terminates the process.
+ */
+void quit(int sig);
+
+/**
+ * Computes the SHA256 hash of a file and writes it to the hash array.
+ */
+void digest_file(const char *filename, uint8_t *hash);
+
+/**
+ * Sends a Response to the client through its FIFO.
+ */
+void sendResponse(struct Response *response, pid_t cPid);
+
+// FIFO path for handling SHA256 requests from clients
+char *path2ServerFIFO = "/tmp/fifo_server_SHA256";
+char *baseClientFIFO = "/tmp/fifo_client_SHA256."; // completed with the process ID
+
+// FIFO file descriptors
 int serverFIFO, serverFIFO_extra;
 
-// Struct to handle the requests list
-// list of pid for multiple requests of the same pathname
+// Node for the list of clients waiting for the same file hash
 typedef struct client_node
 {
     pid_t pid;
     struct client_node *next;
 } client_node_t;
 
-// List to manage requests. Threads read requests from the list and process them
+// Node for the request list
 typedef struct request_list
 {
     char pathname[PATH_MAX];
@@ -37,7 +66,7 @@ typedef struct request_list
     struct request_list *next;
 } request_list_t;
 
-// request list, a mutex, and a condition variable to synchronize the threads
+// Initialize the request list head, the mutex, and the condition variable for thread synchronization
 request_list_t *request_list_head = NULL;
 pthread_mutex_t list_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t list_cond = PTHREAD_COND_INITIALIZER;
@@ -45,12 +74,12 @@ pthread_cond_t list_cond = PTHREAD_COND_INITIALIZER;
 // Add a new request to the request list
 void update_request_list(struct Request *request)
 {
-    // read the file stats to get the last modification time
+    // Read file stats to get the last modification time
     struct stat st;
     if (stat(request->pathname, &st) != 0)
         errExit("stat failed\n");
 
-    // mutex to synchronize with other threads
+    // Lock the mutex to synchronize with other threads
     pthread_mutex_lock(&list_mutex);
 
     request_list_t *prev = NULL, *curr = request_list_head;
@@ -60,14 +89,14 @@ void update_request_list(struct Request *request)
         if (strcmp(curr->pathname, request->pathname) == 0 &&
             curr->last_mod_time == st.st_mtime)
         {
-            // Path-mtime already in the list, add the client pid
-            // only one thread will calculate the sha256 and send to multiple clients
+            // Path and mtime already in the list, add the client PID
+            // Only one thread will calculate the SHA256 and send to multiple clients
             client_node_t *new_client = malloc(sizeof(client_node_t));
             new_client->pid = request->cPid;
             new_client->next = curr->clients;
             curr->clients = new_client;
 
-            // the update function releases the mutex and terminates
+            // Release the mutex and return
             pthread_mutex_unlock(&list_mutex);
             return;
         }
@@ -77,7 +106,7 @@ void update_request_list(struct Request *request)
         curr = curr->next;
     }
 
-    // New Request
+    // New request: allocate and fill the request node
     request_list_t *new_req = malloc(sizeof(request_list_t));
     strncpy(new_req->pathname, request->pathname, PATH_MAX);
     new_req->last_mod_time = st.st_mtime;
@@ -86,19 +115,19 @@ void update_request_list(struct Request *request)
     new_req->clients->pid = request->cPid;
     new_req->clients->next = NULL;
 
-    // Insert the request in the list
+    // Insert the request into the list
     new_req->next = curr;
     if (prev)
         prev->next = new_req;
     else
         request_list_head = new_req;
 
-    // wake up a worker thread and release the mutex
+    // Wake up a worker thread and release the mutex
     pthread_cond_signal(&list_cond);
     pthread_mutex_unlock(&list_mutex);
 }
 
-// Handle client requests; wait on a condition variable if the list is empty
+// Worker thread: handles client requests; waits on a condition variable if the list is empty
 void *worker_thread(void *arg)
 {
     while (1)
@@ -112,18 +141,17 @@ void *worker_thread(void *arg)
             pthread_cond_wait(&list_cond, &list_mutex);
         }
 
-        // Read a request from the list
+        // Remove a request from the head of the list
         request_list_t *req = request_list_head;
         request_list_head = request_list_head->next;
 
         // Unlock the mutex
         pthread_mutex_unlock(&list_mutex);
 
-        // Calcola SHA256 (placeholder)
+        // Compute SHA256 for the requested file
         printf("<Server>Worker %ld: computing SHA256 for %s\n",
                pthread_self(), req->pathname);
 
-        // Preparing the hash256
         uint8_t hash[32];
         digest_file(req->pathname, hash);
 
@@ -135,7 +163,7 @@ void *worker_thread(void *arg)
         struct Response response;
         strcpy(response.hash, char_hash);
 
-        // Send response to all the clients
+        // Send the response to all waiting clients
         client_node_t *clients = req->clients;
         while (clients)
         {
@@ -150,28 +178,27 @@ void *worker_thread(void *arg)
     return NULL;
 }
 
-// the quit function closes the file descriptors for the FIFO,
-// removes the FIFO from the file system, and terminates the process
+// Handles server termination: closes the FIFO descriptors, removes the FIFO, and exits the process
 void quit(int sig)
 {
-    // Close the FIFO
+    // Close the FIFO descriptors
     if (serverFIFO != 0 && close(serverFIFO) == -1)
         errExit("close failed");
 
     if (serverFIFO_extra != 0 && close(serverFIFO_extra) == -1)
         errExit("close failed");
 
-    // Remove the FIFO
+    // Remove the FIFO from the filesystem
     if (unlink(path2ServerFIFO) != 0)
         errExit("unlink failed");
 
-    // terminate the process
+    // Terminate the process
     _exit(0);
 }
 
+// Computes the SHA256 hash of a file and writes it to the hash array
 void digest_file(const char *filename, uint8_t *hash)
 {
-
     SHA256_CTX ctx;
     SHA256_Init(&ctx);
 
@@ -205,76 +232,72 @@ void digest_file(const char *filename, uint8_t *hash)
     close(file);
 }
 
-// Send a Response to a client
+// Sends a Response to a client through its FIFO
 void sendResponse(struct Response *response, pid_t cPid)
 {
-
-    // make the path of client's FIFO
-    char path2ClientFIFO[25];
+    // Build the path to the client's FIFO
+    char path2ClientFIFO[50];
     sprintf(path2ClientFIFO, "%s%d", baseClientFIFO, cPid);
 
     printf("<Server> opening FIFO %s...\n", path2ClientFIFO);
     // Open the client's FIFO in write-only mode
     int clientFIFO = open(path2ClientFIFO, O_WRONLY);
     if (clientFIFO == -1)
-        errExit("\n Error while opening the client_fifo\n");
+        errExit("open: failed to open client FIFO");
 
     printf("<Server> Sending a response to client PID %d\n", cPid);
     // Write the Response into the opened FIFO
-    if (write(clientFIFO, &response, sizeof(response)) != sizeof(struct Response))
-        errExit("\nError while writing in the client_fifo\n");
+    if (write(clientFIFO, response, sizeof(struct Response)) != sizeof(struct Response))
+        errExit("write: failed to write to client FIFO");
 
     // Close the FIFO
     if (close(clientFIFO) == -1)
-        errExit("\nError while closing the client_fifo\n");
+        errExit("close: failed to close client FIFO");
 }
 
 int main(int argc, char *argv[])
 {
-
-    printf("<Server> Making the server FIFO...\n");
-    // make a FIFO with the following permissions:
-    // user:  read, write
-    // group: write
-    // other: no permission
+    printf("<Server> Creating the server FIFO...\n");
+    // Create the FIFO with the following permissions:
+    // user: read, write; group: write; other: no permission
     if (mkfifo(path2ServerFIFO, S_IRUSR | S_IWUSR | S_IWGRP) == -1)
-        errExit("\nError while creating the fifo_server\n");
+        errExit("mkfifo: failed to create server FIFO");
 
     printf("<Server> FIFO %s created!\n", path2ServerFIFO);
 
-    // set a signal handler for SIGINT signals
+    // Set a signal handler for SIGINT to perform cleanup
     signal(SIGINT, quit);
 
-    // Wait for client in read-only mode
-    printf("<Server> waiting for a client...\n");
+    // Wait for clients: open the server FIFO in read-only mode
+    printf("<Server> Waiting for a client connection...\n");
     serverFIFO = open(path2ServerFIFO, O_RDONLY);
     if (serverFIFO == -1)
-        errExit("\nError while opening the fifo_server\n");
+        errExit("open: failed to open server FIFO for reading");
 
-    // Open an extra descriptor, so that the server does not see end-of-file
-    // even if all clients closed the write end of the FIFO
+    // Open an extra write descriptor to prevent EOF when all clients disconnect
     serverFIFO_extra = open(path2ServerFIFO, O_WRONLY);
     if (serverFIFO_extra == -1)
-        errExit("open write-only extra failed");
+        errExit("open: failed to open extra write descriptor for server FIFO");
 
-    // Calculate the thread_pool_size based on the cores available
-    long thread_pool_size = sysconf(_SC_NPROCESSORS_ONLN) - 1; // -1 for the thread manager
+    // Calculate the thread pool size based on available CPU cores ( -1 for the thread manager)
+    long thread_pool_size = sysconf(_SC_NPROCESSORS_ONLN) - 1;
     if (thread_pool_size < 0)
-        errExit("Sysconf failed\n");
+        errExit("sysconf: failed to get the number of available processors");
 
     // Create the thread pool
     pthread_t threads[thread_pool_size];
     for (int i = 0; i < thread_pool_size; i++)
     {
-        pthread_create(&threads[i], NULL, worker_thread, NULL);
+        if (pthread_create(&threads[i], NULL, worker_thread, NULL) != 0)
+            errExit("pthread_create: failed to create worker thread");
     }
 
-    // Read from the FIFO and update the requests list for the worker threads
+    // Read requests from the FIFO and update the request list for worker threads
     struct Request request;
     int bR = -1;
     do
     {
-        printf("<Server> waiting for a Request...\n");
+        printf("<Server> Waiting for a request from a client...\n");
         // Read a request from the FIFO
         bR = read(serverFIFO, &request, sizeof(struct Request));
 
@@ -290,7 +313,6 @@ int main(int argc, char *argv[])
 
     } while (bR != -1);
 
-    // the FIFO is broken, run quit() to remove the FIFO and
-    // terminate the process.
+    // The FIFO is broken, run quit() to remove the FIFO and terminate the process
     quit(0);
 }
