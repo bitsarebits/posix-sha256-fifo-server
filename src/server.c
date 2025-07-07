@@ -12,6 +12,51 @@
 #include "errExit.h"
 #include "request_response.h"
 
+#define CACHE_SIZE 1024
+
+// FIFO path for handling SHA256 requests from clients
+char *path2ServerFIFO = "/tmp/fifo_server_SHA256";
+char *baseClientFIFO = "/tmp/fifo_client_SHA256."; // completed with the process ID
+
+// FIFO file descriptors
+int serverFIFO = -1;
+int serverFIFO_extra = -1;
+
+// Node for the list of clients waiting for the same file hash
+typedef struct client_node
+{
+    pid_t pid;
+    struct client_node *next;
+} client_node_t;
+
+// Node for the request list
+typedef struct request_list
+{
+    char pathname[PATH_MAX];
+    time_t last_mod_time;
+    size_t filesize;
+    client_node_t *clients;
+    struct request_list *next;
+} request_list_t;
+
+// Node for the cache table
+typedef struct cache_entry
+{
+    char pathname[PATH_MAX];
+    time_t last_mod_time;
+    uint8_t sha256[32];       // hash SHA256 32 bytes
+    struct cache_entry *next; // Next entry in case of collision
+} cache_entry_t;
+
+// Initialize the requests list head, the mutex, and the condition variable for thread synchronization
+request_list_t *request_list_head = NULL;
+pthread_mutex_t list_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t list_cond = PTHREAD_COND_INITIALIZER;
+
+// Initialize the cache table and the mutex
+cache_entry_t *cache[CACHE_SIZE] = {NULL};
+pthread_mutex_t cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 // Function prototypes
 
 /**
@@ -48,34 +93,21 @@ void digest_file(const char *filename, uint8_t *hash);
  */
 void sendResponse(struct Response *response, pid_t cPid);
 
-// FIFO path for handling SHA256 requests from clients
-char *path2ServerFIFO = "/tmp/fifo_server_SHA256";
-char *baseClientFIFO = "/tmp/fifo_client_SHA256."; // completed with the process ID
+/**
+ * Computes a hash value for a given pathname and mtime using the djb2 algorithm.
+ */
+unsigned int hash_path(const char *path, time_t mtime);
 
-// FIFO file descriptors
-int serverFIFO, serverFIFO_extra;
+/**
+ * Searches the cache for a previously computed SHA256.
+ * Returns pointer to cache entry or NULL if not found.
+ */
+cache_entry_t *cache_lookup(const char *pathname, time_t mtime);
 
-// Node for the list of clients waiting for the same file hash
-typedef struct client_node
-{
-    pid_t pid;
-    struct client_node *next;
-} client_node_t;
-
-// Node for the request list
-typedef struct request_list
-{
-    char pathname[PATH_MAX];
-    time_t last_mod_time;
-    size_t filesize;
-    client_node_t *clients;
-    struct request_list *next;
-} request_list_t;
-
-// Initialize the request list head, the mutex, and the condition variable for thread synchronization
-request_list_t *request_list_head = NULL;
-pthread_mutex_t list_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t list_cond = PTHREAD_COND_INITIALIZER;
+/**
+ * Inserts a new SHA256 hash into the cache.
+ */
+void cache_insert(const char *pathname, time_t mtime, const uint8_t *sha256);
 
 // Add a new request to the request list
 void update_request_list(struct Request *request)
@@ -133,34 +165,53 @@ void update_request_list(struct Request *request)
     pthread_mutex_unlock(&list_mutex);
 }
 
-// Worker thread: handles client requests; waits on a condition variable if the list is empty
+// Worker thread: handles client requests; waits on a condition variable if the list is empty;
+// uses cache to avoid recomputing SHA256
 void *worker_thread(void *arg)
 {
     while (1)
     {
-        // Acquire the lock to access the request list
+        // Acquire the list_mutex to access the request list
         pthread_mutex_lock(&list_mutex);
 
         // If the list is empty, wait on the condition variable
         while (!request_list_head)
-        {
             pthread_cond_wait(&list_cond, &list_mutex);
-        }
 
-        // Remove a request from the head of the list
+        // take a request from the head of the list
         request_list_t *req = request_list_head;
         request_list_head = request_list_head->next;
 
-        // Unlock the mutex
+        // Unlock the list_mutex
         pthread_mutex_unlock(&list_mutex);
 
         // Compute SHA256 for the requested file
         printf("<Server> Worker %ld: computing SHA256 for %s\n",
                pthread_self(), req->pathname);
 
-        uint8_t hash[32];
-        digest_file(req->pathname, hash);
+        // Initialize to zeros
+        uint8_t hash[32] = {0};
 
+        // Check if SHA256 is already cached
+        pthread_mutex_lock(&cache_mutex);
+        cache_entry_t *cached = cache_lookup(req->pathname, req->last_mod_time);
+        pthread_mutex_unlock(&cache_mutex);
+
+        if (cached)
+        {
+            // Cache HIT: reuse cached SHA256
+            printf("<Server> Worker %ld: cache HIT for %s\n", pthread_self(), req->pathname);
+            memcpy(hash, cached->sha256, 32);
+        }
+        else
+        {
+            // Cache MISS: compute SHA256 and insert into cache
+            printf("<Server> Worker %ld: cache MISS for %s, computing SHA256...\n", pthread_self(), req->pathname);
+            digest_file(req->pathname, hash);
+            cache_insert(req->pathname, req->last_mod_time, hash);
+        }
+
+        // Convert binary SHA256 to hex string
         char char_hash[65];
         for (int i = 0; i < 32; i++)
             sprintf(char_hash + (i * 2), "%02x", hash[i]);
@@ -188,15 +239,14 @@ void *worker_thread(void *arg)
 void quit(int sig)
 {
     // Close the FIFO descriptors
-    if (serverFIFO != 0 && close(serverFIFO) == -1)
+    if (serverFIFO != -1 && close(serverFIFO) == -1)
         errExit("close failed");
 
-    if (serverFIFO_extra != 0 && close(serverFIFO_extra) == -1)
+    if (serverFIFO_extra != -1 && close(serverFIFO_extra) == -1)
         errExit("close failed");
 
-    // Remove the FIFO from the filesystem
-    if (unlink(path2ServerFIFO) != 0)
-        errExit("unlink failed");
+    // Remove FIFO from the filesystem (ignore errors if already removed)
+    unlink(path2ServerFIFO);
 
     // Terminate the process
     _exit(0);
@@ -264,6 +314,64 @@ void sendResponse(struct Response *response, pid_t cPid)
         errExit("close: failed to close client FIFO");
 }
 
+// djb2 hash function for pathname and mtime
+unsigned int hash_path(const char *path, time_t mtime)
+{
+    unsigned int hash = 5381;
+    int c;
+
+    // Process each character of the pathname
+    while ((c = *path++))
+        hash = ((hash << 5) + hash) + c; // hash * 33 + c
+
+    // Mix last modification time
+    hash = ((hash << 5) + hash) + (unsigned int)mtime;
+
+    return hash % CACHE_SIZE; // Keep index in range
+}
+
+// Searches the cache for a previously computed SHA256
+// Returns pointer to cache entry or NULL if not found
+cache_entry_t *cache_lookup(const char *pathname, time_t mtime)
+{
+    // calculate the hash table entry
+    unsigned int idx = hash_path(pathname, mtime);
+
+    cache_entry_t *entry = cache[idx];
+    while (entry)
+    {
+        if (strcmp(entry->pathname, pathname) == 0 &&
+            entry->last_mod_time == mtime)
+            return entry; // cache HIT
+        entry = entry->next;
+    }
+    return NULL; // cache MISS
+}
+
+// Inserts a new SHA256 hash into the cache
+// Adds entry to head of chain for this bucket
+void cache_insert(const char *pathname, time_t mtime, const uint8_t *sha256)
+{
+    // Hash table index
+    unsigned int index = hash_path(pathname, mtime);
+
+    // New cache entry
+    cache_entry_t *new_entry = malloc(sizeof(cache_entry_t));
+    if (!new_entry)
+        errExit("malloc failed\n");
+
+    strncpy(new_entry->pathname, pathname, PATH_MAX - 1);
+    new_entry->pathname[PATH_MAX - 1] = '\0';
+    new_entry->last_mod_time = mtime;
+    memcpy(new_entry->sha256, sha256, 32);
+
+    // Insert at head of collision chain, use the mutex for thread synchronization
+    pthread_mutex_lock(&cache_mutex);
+    new_entry->next = cache[index];
+    cache[index] = new_entry;
+    pthread_mutex_unlock(&cache_mutex);
+}
+
 int main(int argc, char *argv[])
 {
     printf("<Server> Creating the server FIFO...\n");
@@ -291,8 +399,8 @@ int main(int argc, char *argv[])
 
     // Calculate the thread pool size based on available CPU cores ( -1 for the thread manager)
     long thread_pool_size = sysconf(_SC_NPROCESSORS_ONLN) - 1;
-    if (thread_pool_size < 0)
-        errExit("sysconf: failed to get the number of available processors");
+    if (thread_pool_size < 1)
+        thread_pool_size = 1; // Minimum 1 worker thread
 
     // Create the thread pool
     pthread_t threads[thread_pool_size];

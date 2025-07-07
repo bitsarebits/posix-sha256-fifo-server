@@ -3,7 +3,7 @@
 
 #include <sys/types.h>
 
-#define PATH_MAX 100
+#define PATH_MAX 512
 
 struct Request
 {                            /* Request (client --> server) */
