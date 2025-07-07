@@ -33,6 +33,12 @@ void *worker_thread(void *arg);
 void quit(int sig);
 
 /**
+ * Wrapper function for atexit to ensure cleanup on normal process termination.
+ * Calls quit with a default signal value.
+ */
+void quit_atexit(void);
+
+/**
  * Computes the SHA256 hash of a file and writes it to the hash array.
  */
 void digest_file(const char *filename, uint8_t *hash);
@@ -196,6 +202,9 @@ void quit(int sig)
     _exit(0);
 }
 
+// Calls quit with a default signal value
+void quit_atexit(void) { quit(SIGINT); }
+
 // Computes the SHA256 hash of a file and writes it to the hash array
 void digest_file(const char *filename, uint8_t *hash)
 {
@@ -265,8 +274,9 @@ int main(int argc, char *argv[])
 
     printf("<Server> FIFO %s created!\n", path2ServerFIFO);
 
-    // Set a signal handler for SIGINT to perform cleanup
+    // Set a signal handler for SIGINT and atexit to perform cleanup
     signal(SIGINT, quit);
+    atexit(quit_atexit);
 
     // Wait for clients: open the server FIFO in read-only mode
     printf("<Server> Waiting for a client connection...\n");
