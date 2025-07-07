@@ -5,76 +5,108 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
+#include <signal.h>
 
 #include "request_response.h"
 #include "errExit.h"
 
-// FIFO path to handle the sha requests
+// Function prototypes for cleanup
+/**
+ * Handles client termination: removes the client FIFO and exits the process.
+ */
+void quit(int sig);
+
+/**
+ * Wrapper function for atexit to ensure cleanup on normal process termination.
+ * Calls quit with a default signal value.
+ */
+void quit_atexit(void);
+
+// FIFO paths for handling SHA256 requests
 char *path2ServerFIFO = "/tmp/fifo_server_SHA256";
-char *baseClientFIFO = "/tmp/fifo_client_SHA256."; // to complete with the processID
+char *baseClientFIFO = "/tmp/fifo_client_SHA256."; // completed with the process ID
 
 #define MAX 100
 
 int main(int argc, char *argv[])
 {
-
-    // Check command line input arguments
-    // The program only wants a pathname of the file to convert with sha256
+    // Check command line arguments: expects a single pathname
     if (argc != 2)
     {
-        printf("Usage: %s pathname\n", argv[0]);
+        printf("Usage: %s <pathname>\n", argv[0]);
         return 0;
     }
 
-    // makes a FIFO in /tmp
+    // Register cleanup functions for SIGINT and normal exit
+    signal(SIGINT, quit);
+    atexit(quit_atexit);
+
+    // Create the client FIFO in /tmp
     char path2ClientFIFO[25];
     sprintf(path2ClientFIFO, "%s%d", baseClientFIFO, getpid());
 
-    printf("<Client> making FIFO...\n");
-    // make a FIFO with the following permissions:
-    // user:  read, write
-    // group: write
-    // other: no permission
+    printf("<Client> Creating FIFO %s...\n", path2ClientFIFO);
+    // // Create the FIFO with the following permissions:
+    // user: read, write; group: write; other: no permission
     if (mkfifo(path2ClientFIFO, S_IRUSR | S_IWUSR | S_IWGRP) == -1)
-        errExit("\nError while creating the client_fifo.pid\n");
+        errExit("mkfifo: failed to create client FIFO");
 
     printf("<Client> FIFO %s created!\n", path2ClientFIFO);
 
-    // open the server's FIFO to send a Request
-    printf("<Client> opening FIFO %s...\n", path2ServerFIFO);
+    // Open the server FIFO to send a request
+    printf("<Client> Opening server FIFO %s...\n", path2ServerFIFO);
     int serverFIFO = open(path2ServerFIFO, O_WRONLY);
     if (serverFIFO == -1)
-        errExit("\nError while opening the server_fifo\n");
+        errExit("open: failed to open server FIFO");
 
-    // Prepare a request
+    // Prepare the request
     struct Request request;
     request.cPid = getpid();
     strncpy(request.pathname, argv[1], sizeof(request.pathname) - 1);
     request.pathname[sizeof(request.pathname) - 1] = '\0';
 
-    // send a Request through the server's FIFO
-    printf("<Client> sending %s\n", request.pathname);
+    // Send the request through the server FIFO
+    printf("<Client> Sending request for file: %s\n", request.pathname);
     if (write(serverFIFO, &request, sizeof(request)) != sizeof(struct Request))
-        errExit("\nError while writing the Request on the server_fifo\n");
+        errExit("write: failed to write request to server FIFO");
 
-    // opens the FIFO.pid to get a Response
+    // Open the client FIFO to receive the response
+    printf("<Client> Opening client FIFO %s...\n", path2ClientFIFO);
     int clientFIFO = open(path2ClientFIFO, O_RDONLY);
     if (clientFIFO == -1)
-        errExit("\nError while opening the client_fifo.pid\n");
+        errExit("open: failed to open client FIFO");
 
-    // read a Response from the server
+    // Read the response from the server
     struct Response response;
     if (read(clientFIFO, &response, sizeof(struct Response)) != sizeof(struct Response))
-        errExit("\nError while reading the response from client_fifo.pid\n");
+        errExit("read: failed to read response from client FIFO");
 
-    // Step-6: The client prints the result on terminal
+    // Print the result
     printf("<Client> The SHA256 is: %s\n", response.hash);
 
-    // close the FIFO
+    // Close the client FIFO
     if (close(clientFIFO) == -1)
-        errExit("\nError while closing the client_fifo\n");
+        errExit("close: failed to close client FIFO");
 
-    // remove the FIFO from the file system
+    // Remove the client FIFO from the file system
     if (unlink(path2ClientFIFO) == -1)
-        errExit("\nError while unlinking the client_fifo.pid\n");
+        errExit("unlink: failed to remove client FIFO");
+
+    return 0;
 }
+
+// Handles client termination: removes the client FIFO and exits the process.
+void quit(int sig)
+{
+    // Remove the client FIFO from the file system if it exists
+    char path2ClientFIFO[25];
+    sprintf(path2ClientFIFO, "%s%d", baseClientFIFO, getpid());
+    if (unlink(path2ClientFIFO) != 0)
+        errExit("unlink failed");
+
+    // Terminate the process
+    _exit(0);
+}
+
+// Calls quit with a default signal value.
+void quit_atexit(void) { quit(SIGINT); }
