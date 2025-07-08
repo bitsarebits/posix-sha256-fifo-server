@@ -81,8 +81,14 @@ int main(int argc, char *argv[])
     if (read(clientFIFO, &response, sizeof(struct Response)) != sizeof(struct Response))
         errExit("read: failed to read response from client FIFO");
 
+    if (response.errCode != 0 && response.errCode != CLOSE_FILE_E)
+        errExit(get_error_message(response.errCode));
+
     // Print the result
     printf("<Client> The SHA256 is: %s\n", response.hash);
+
+    if (response.errCode == CLOSE_FILE_E)
+        fprintf(stderr, "%s", get_error_message(response.errCode));
 
     // Close the client FIFO
     if (close(clientFIFO) == -1)

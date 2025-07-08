@@ -193,6 +193,33 @@ src/errExit.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/errExit.c.s
 .PHONY : src/errExit.c.s
 
+src/request_response.o: src/request_response.c.o
+.PHONY : src/request_response.o
+
+# target to build an object file
+src/request_response.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/client.dir/build.make CMakeFiles/client.dir/src/request_response.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/request_response.c.o
+.PHONY : src/request_response.c.o
+
+src/request_response.i: src/request_response.c.i
+.PHONY : src/request_response.i
+
+# target to preprocess a source file
+src/request_response.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/client.dir/build.make CMakeFiles/client.dir/src/request_response.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/request_response.c.i
+.PHONY : src/request_response.c.i
+
+src/request_response.s: src/request_response.c.s
+.PHONY : src/request_response.s
+
+# target to generate assembly for a file
+src/request_response.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/client.dir/build.make CMakeFiles/client.dir/src/request_response.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/server.dir/build.make CMakeFiles/server.dir/src/request_response.c.s
+.PHONY : src/request_response.c.s
+
 src/server.o: src/server.c.o
 .PHONY : src/server.o
 
@@ -233,6 +260,9 @@ help:
 	@echo "... src/errExit.o"
 	@echo "... src/errExit.i"
 	@echo "... src/errExit.s"
+	@echo "... src/request_response.o"
+	@echo "... src/request_response.i"
+	@echo "... src/request_response.s"
 	@echo "... src/server.o"
 	@echo "... src/server.i"
 	@echo "... src/server.s"

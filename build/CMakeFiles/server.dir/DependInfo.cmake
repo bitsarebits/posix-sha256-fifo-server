@@ -9,6 +9,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/isaia/uni/Sistemi_Operativi/project/SHA256/src/errExit.c" "CMakeFiles/server.dir/src/errExit.c.o" "gcc" "CMakeFiles/server.dir/src/errExit.c.o.d"
+  "/home/isaia/uni/Sistemi_Operativi/project/SHA256/src/request_response.c" "CMakeFiles/server.dir/src/request_response.c.o" "gcc" "CMakeFiles/server.dir/src/request_response.c.o.d"
   "/home/isaia/uni/Sistemi_Operativi/project/SHA256/src/server.c" "CMakeFiles/server.dir/src/server.c.o" "gcc" "CMakeFiles/server.dir/src/server.c.o.d"
   )
 

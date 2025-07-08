@@ -32,6 +32,7 @@ typedef struct client_node
 // Node for the request list
 typedef struct request_list
 {
+    short errCode;
     char pathname[PATH_MAX];
     time_t last_mod_time;
     size_t filesize;
@@ -73,6 +74,12 @@ void update_request_list(struct Request *request);
 void *worker_thread(void *arg);
 
 /**
+ * Send a response calling fifo_client() for each client in req->clients.
+ * Frees the request_list element and its client list memory after sending.
+ */
+void send_response(request_list_t *req, struct Response *response);
+
+/**
  * Handles server termination: closes and removes the FIFO, terminates the process.
  */
 void quit(int sig);
@@ -85,13 +92,14 @@ void quit_atexit(void);
 
 /**
  * Computes the SHA256 hash of a file and writes it to the hash array.
+ * Returns an Error Code from request_response.h if something goes wrong, 0 on success.
  */
-void digest_file(const char *filename, uint8_t *hash);
+short digest_file(const char *filename, uint8_t *hash);
 
 /**
  * Sends a Response to the client through its FIFO.
  */
-void sendResponse(struct Response *response, pid_t cPid);
+void fifo_client(struct Response *response, pid_t cPid);
 
 /**
  * Computes a hash value for a given pathname and mtime using the djb2 algorithm.
@@ -115,7 +123,31 @@ void update_request_list(struct Request *request)
     // Read file stats to get the last modification time
     struct stat st;
     if (stat(request->pathname, &st) != 0)
-        errExit("stat failed\n");
+    {
+        // Add an invalid element to the list with errCode STAT_E
+        request_list_t *new_req = malloc(sizeof(request_list_t));
+        if (!new_req)
+        {
+            printf("<Server> Malloc failed, client %d not served", request->cPid);
+            return;
+        }
+        new_req->errCode = STAT_E; // stat failed
+        strncpy(new_req->pathname, request->pathname, PATH_MAX);
+        new_req->clients = malloc(sizeof(client_node_t));
+        if (!new_req->clients)
+        {
+            printf("<Server> Malloc failed, client %d not served", request->cPid);
+            return;
+        }
+        new_req->clients->pid = request->cPid;
+        new_req->clients->next = NULL;
+
+        // Insert the invalid request into the list, the worker will handle this
+        new_req->next = request_list_head;
+        request_list_head = new_req;
+        printf("<Server> Stat failed for %s\n", request->pathname);
+        return;
+    }
 
     // Lock the mutex to synchronize with other threads
     pthread_mutex_lock(&list_mutex);
@@ -130,6 +162,11 @@ void update_request_list(struct Request *request)
             // Path and mtime already in the list, add the client PID
             // Only one thread will calculate the SHA256 and send to multiple clients
             client_node_t *new_client = malloc(sizeof(client_node_t));
+            if (!new_client)
+            {
+                printf("<Server> Malloc failed, client %d not served", request->cPid);
+                return;
+            }
             new_client->pid = request->cPid;
             new_client->next = curr->clients;
             curr->clients = new_client;
@@ -146,10 +183,21 @@ void update_request_list(struct Request *request)
 
     // New request: allocate and fill the request node
     request_list_t *new_req = malloc(sizeof(request_list_t));
+    if (!new_req)
+    {
+        printf("<Server> Malloc failed, client %d not served", request->cPid);
+        return;
+    }
+    new_req->errCode = 0; // success
     strncpy(new_req->pathname, request->pathname, PATH_MAX);
     new_req->last_mod_time = st.st_mtime;
     new_req->filesize = st.st_size;
     new_req->clients = malloc(sizeof(client_node_t));
+    if (!new_req->clients)
+    {
+        printf("<Server> Malloc failed, client %d not served", request->cPid);
+        return;
+    }
     new_req->clients->pid = request->cPid;
     new_req->clients->next = NULL;
 
@@ -169,6 +217,7 @@ void update_request_list(struct Request *request)
 // uses cache to avoid recomputing SHA256
 void *worker_thread(void *arg)
 {
+    sleep(20);
     while (1)
     {
         // Acquire the list_mutex to access the request list
@@ -184,6 +233,14 @@ void *worker_thread(void *arg)
 
         // Unlock the list_mutex
         pthread_mutex_unlock(&list_mutex);
+
+        struct Response response;
+        if (req->errCode != 0)
+        {
+            response.errCode = req->errCode;
+            send_response(req, &response);
+            continue;
+        }
 
         // Compute SHA256 for the requested file
         printf("<Server> Worker %ld: computing SHA256 for %s\n",
@@ -207,7 +264,14 @@ void *worker_thread(void *arg)
         {
             // Cache MISS: compute SHA256 and insert into cache
             printf("<Server> Worker %ld: cache MISS for %s, computing SHA256...\n", pthread_self(), req->pathname);
-            digest_file(req->pathname, hash);
+
+            response.errCode = digest_file(req->pathname, hash);
+
+            if (response.errCode != 0 && response.errCode != CLOSE_FILE_E)
+            {
+                send_response(req, &response);
+                continue;
+            }
             cache_insert(req->pathname, req->last_mod_time, hash);
         }
 
@@ -217,22 +281,27 @@ void *worker_thread(void *arg)
             sprintf(char_hash + (i * 2), "%02x", hash[i]);
 
         // Prepare the response for the clients
-        struct Response response;
         strcpy(response.hash, char_hash);
 
         // Send the response to all waiting clients
-        client_node_t *clients = req->clients;
-        while (clients)
-        {
-            sendResponse(&response, clients->pid);
-            client_node_t *tmp = clients;
-            clients = clients->next;
-            free(tmp);
-        }
-
-        free(req);
+        send_response(req, &response);
     }
     return NULL;
+}
+
+// Send the response to all waiting clients
+void send_response(request_list_t *req, struct Response *response)
+{
+    client_node_t *clients = req->clients;
+    while (clients)
+    {
+        fifo_client(response, clients->pid);
+        client_node_t *tmp = clients;
+        clients = clients->next;
+        free(tmp);
+    }
+
+    free(req);
 }
 
 // Handles server termination: closes the FIFO descriptors, removes the FIFO, and exits the process
@@ -256,7 +325,7 @@ void quit(int sig)
 void quit_atexit(void) { quit(SIGINT); }
 
 // Computes the SHA256 hash of a file and writes it to the hash array
-void digest_file(const char *filename, uint8_t *hash)
+short digest_file(const char *filename, uint8_t *hash)
 {
     SHA256_CTX ctx;
     SHA256_Init(&ctx);
@@ -266,8 +335,8 @@ void digest_file(const char *filename, uint8_t *hash)
     int file = open(filename, O_RDONLY, 0);
     if (file == -1)
     {
-        printf("File %s does not exist\n", filename);
-        exit(1);
+        printf("<Server> Worker %ld: Can't open the file %s\n", pthread_self(), filename);
+        return OPEN_FILE_E;
     }
 
     ssize_t bR;
@@ -281,37 +350,49 @@ void digest_file(const char *filename, uint8_t *hash)
         }
         else if (bR < 0)
         {
-            printf("Read failed\n");
-            exit(1);
+            printf("<Server> Worker %ld: Can't read the file\n", pthread_self());
+            return READ_FILE_E;
         }
     } while (bR > 0);
 
     SHA256_Final(hash, &ctx);
 
-    close(file);
+    if (close(file) != 0)
+    {
+        printf("<Server> close failed for %s", filename);
+        return CLOSE_FILE_E;
+    }
+    return 0;
 }
 
 // Sends a Response to a client through its FIFO
-void sendResponse(struct Response *response, pid_t cPid)
+void fifo_client(struct Response *response, pid_t cPid)
 {
     // Build the path to the client's FIFO
     char path2ClientFIFO[50];
     sprintf(path2ClientFIFO, "%s%d", baseClientFIFO, cPid);
 
-    printf("<Server> opening FIFO %s...\n", path2ClientFIFO);
+    printf("<Server> Worker %ld: Sending a response to client PID %d...\n", pthread_self(), cPid);
     // Open the client's FIFO in write-only mode
     int clientFIFO = open(path2ClientFIFO, O_WRONLY);
     if (clientFIFO == -1)
-        errExit("open: failed to open client FIFO");
+    {
+        printf("<Server> Worker %ld: failed to open client FIFO %s", pthread_self(), path2ClientFIFO);
+        return;
+    }
 
-    printf("<Server> Sending a response to client PID %d\n", cPid);
     // Write the Response into the opened FIFO
     if (write(clientFIFO, response, sizeof(struct Response)) != sizeof(struct Response))
-        errExit("write: failed to write to client FIFO");
+    {
+        printf("<Server> Worker %ld: failed to write on client FIFO %s", pthread_self(), path2ClientFIFO);
+    }
 
     // Close the FIFO
     if (close(clientFIFO) == -1)
-        errExit("close: failed to close client FIFO");
+    {
+        printf("<Server> Worker %ld: failed to close client FIFO %s", pthread_self(), path2ClientFIFO);
+        return;
+    }
 }
 
 // djb2 hash function for pathname and mtime
@@ -358,7 +439,10 @@ void cache_insert(const char *pathname, time_t mtime, const uint8_t *sha256)
     // New cache entry
     cache_entry_t *new_entry = malloc(sizeof(cache_entry_t));
     if (!new_entry)
-        errExit("malloc failed\n");
+    {
+        printf("<Server> Worker %ld: Malloc failed, %s not stored in the cache\n", pthread_self(), pathname);
+        return;
+    }
 
     strncpy(new_entry->pathname, pathname, PATH_MAX - 1);
     new_entry->pathname[PATH_MAX - 1] = '\0';
@@ -410,13 +494,11 @@ int main(int argc, char *argv[])
             errExit("pthread_create: failed to create worker thread");
     }
 
-    sleep(30);
     // Read requests from the FIFO and update the request list for worker threads
     struct Request request;
     int bR = -1;
     do
     {
-        printf("<Server> Waiting for a request from a client...\n");
         // Read a request from the FIFO
         bR = read(serverFIFO, &request, sizeof(struct Request));
 
@@ -428,7 +510,10 @@ int main(int argc, char *argv[])
         else if (bR != sizeof(struct Request))
             printf("<Server> it looks like I did not receive a valid request\n");
         else
+        {
+            printf("<Server> Received %s from %d\n", request.pathname, request.cPid);
             update_request_list(&request);
+        }
 
     } while (bR != -1);
 

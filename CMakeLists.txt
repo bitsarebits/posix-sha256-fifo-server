@@ -12,8 +12,8 @@ find_package(OpenSSL REQUIRED)
 
 include_directories(SYSTEM ${PROJECT_SOURCE_DIR}/include ${OPENSSL_INCLUDE_DIR})
 
-add_executable(client src/client.c src/errExit.c)
+add_executable(client src/client.c src/errExit.c src/request_response.c)
 target_link_libraries(client ${OPENSSL_LIBRARIES})
 
-add_executable(server src/server.c src/errExit.c)
+add_executable(server src/server.c src/errExit.c src/request_response.c)
 target_link_libraries(server ${OPENSSL_LIBRARIES} pthread)

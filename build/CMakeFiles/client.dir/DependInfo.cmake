@@ -10,6 +10,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/isaia/uni/Sistemi_Operativi/project/SHA256/src/client.c" "CMakeFiles/client.dir/src/client.c.o" "gcc" "CMakeFiles/client.dir/src/client.c.o.d"
   "/home/isaia/uni/Sistemi_Operativi/project/SHA256/src/errExit.c" "CMakeFiles/client.dir/src/errExit.c.o" "gcc" "CMakeFiles/client.dir/src/errExit.c.o.d"
+  "/home/isaia/uni/Sistemi_Operativi/project/SHA256/src/request_response.c" "CMakeFiles/client.dir/src/request_response.c.o" "gcc" "CMakeFiles/client.dir/src/request_response.c.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.
