@@ -12,5 +12,5 @@ void errExit(const char *msg)
     else // avoid : success
         fprintf(stderr, "%s", msg);
 
-    exit(1);
+    exit(EXIT_FAILURE);
 }

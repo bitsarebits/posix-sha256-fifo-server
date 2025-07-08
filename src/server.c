@@ -130,33 +130,42 @@ void update_request_list(struct Request *request)
     struct stat st;
     if (stat(request->pathname, &st) != 0)
     {
-        // Lock the mutex to synchronize with other threads
-        pthread_mutex_lock(&list_mutex);
 
         // Add an invalid element to the list with errCode STAT_E
         request_list_t *new_req = malloc(sizeof(request_list_t));
         if (!new_req)
         {
-            printf("<Server> Malloc failed, client %d not served", request->cPid);
+            printf("<Server> Malloc failed, client %d not served\n", request->cPid);
             return;
         }
+
+        client_node_t *new_client = malloc(sizeof(client_node_t));
+        if (!new_client)
+        {
+            printf("<Server> Malloc failed, client %d not served\n", request->cPid);
+            free(new_req);
+            return;
+        }
+
+        // Prepare the invalid node
         new_req->errCode = STAT_E; // stat failed
         strncpy(new_req->pathname, request->pathname, PATH_MAX);
-        new_req->clients = malloc(sizeof(client_node_t));
-        if (!new_req->clients)
-        {
-            printf("<Server> Malloc failed, client %d not served", request->cPid);
-            return;
-        }
-        new_req->clients->pid = request->cPid;
-        new_req->clients->next = NULL;
+        new_req->filesize = 0; // will be first in the list
+        new_req->last_mod_time = 0;
+        new_client->pid = request->cPid;
+        new_client->next = NULL;
+        new_req->clients = new_client;
+
+        // Lock the mutex to synchronize with other threads
+        pthread_mutex_lock(&list_mutex);
 
         // Insert the invalid request into the list, the worker will handle this
         new_req->next = request_list_head;
         request_list_head = new_req;
         printf("<Server> Stat failed for %s\n", request->pathname);
 
-        // Release the mutex and return
+        // Wake up a worker thread, release the mutex and return
+        pthread_cond_signal(&list_cond);
         pthread_mutex_unlock(&list_mutex);
         return;
     }
@@ -176,7 +185,8 @@ void update_request_list(struct Request *request)
             client_node_t *new_client = malloc(sizeof(client_node_t));
             if (!new_client)
             {
-                printf("<Server> Malloc failed, client %d not served", request->cPid);
+                printf("<Server> Malloc failed, client %d not served\n", request->cPid);
+                pthread_mutex_unlock(&list_mutex);
                 return;
             }
             new_client->pid = request->cPid;
@@ -197,21 +207,28 @@ void update_request_list(struct Request *request)
     request_list_t *new_req = malloc(sizeof(request_list_t));
     if (!new_req)
     {
-        printf("<Server> Malloc failed, client %d not served", request->cPid);
+        printf("<Server> Malloc failed, client %d not served\n", request->cPid);
+        pthread_mutex_unlock(&list_mutex);
         return;
     }
+
+    client_node_t *new_client = malloc(sizeof(client_node_t));
+    if (!new_client)
+    {
+        printf("<Server> Malloc failed, client %d not served\n", request->cPid);
+        free(new_req);
+        pthread_mutex_unlock(&list_mutex);
+        return;
+    }
+
+    // Prepare the node
     new_req->errCode = 0; // success
     strncpy(new_req->pathname, request->pathname, PATH_MAX);
     new_req->last_mod_time = st.st_mtime;
     new_req->filesize = st.st_size;
-    new_req->clients = malloc(sizeof(client_node_t));
-    if (!new_req->clients)
-    {
-        printf("<Server> Malloc failed, client %d not served", request->cPid);
-        return;
-    }
-    new_req->clients->pid = request->cPid;
-    new_req->clients->next = NULL;
+    new_client->pid = request->cPid;
+    new_client->next = NULL;
+    new_req->clients = new_client;
 
     // Insert the request into the list
     new_req->next = curr;
