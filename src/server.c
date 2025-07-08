@@ -80,6 +80,12 @@ void *worker_thread(void *arg);
 void send_response(request_list_t *req, struct Response *response);
 
 /**
+ * Frees all memory allocated for the hash cache.
+ * Called during server termination.
+ */
+void cache_cleanup(void);
+
+/**
  * Handles server termination: closes and removes the FIFO, terminates the process.
  */
 void quit(int sig);
@@ -124,6 +130,9 @@ void update_request_list(struct Request *request)
     struct stat st;
     if (stat(request->pathname, &st) != 0)
     {
+        // Lock the mutex to synchronize with other threads
+        pthread_mutex_lock(&list_mutex);
+
         // Add an invalid element to the list with errCode STAT_E
         request_list_t *new_req = malloc(sizeof(request_list_t));
         if (!new_req)
@@ -146,6 +155,9 @@ void update_request_list(struct Request *request)
         new_req->next = request_list_head;
         request_list_head = new_req;
         printf("<Server> Stat failed for %s\n", request->pathname);
+
+        // Release the mutex and return
+        pthread_mutex_unlock(&list_mutex);
         return;
     }
 
@@ -304,9 +316,31 @@ void send_response(request_list_t *req, struct Response *response)
     free(req);
 }
 
+// Cleanup the cache and free the memory allocated
+void cache_cleanup()
+{
+    pthread_mutex_lock(&cache_mutex);
+    for (int i = 0; i < CACHE_SIZE; i++)
+    {
+        cache_entry_t *entry = cache[i];
+        while (entry)
+        {
+            cache_entry_t *next = entry->next;
+            free(entry);
+            entry = next;
+        }
+        cache[i] = NULL;
+    }
+    pthread_mutex_unlock(&cache_mutex);
+}
+
 // Handles server termination: closes the FIFO descriptors, removes the FIFO, and exits the process
 void quit(int sig)
 {
+    // cleanup the cache
+    printf("<Server> Cleanup the cache\n");
+    cache_cleanup();
+
     // Close the FIFO descriptors
     if (serverFIFO != -1 && close(serverFIFO) == -1)
         errExit("close failed");
@@ -316,6 +350,7 @@ void quit(int sig)
 
     // Remove FIFO from the filesystem (ignore errors if already removed)
     unlink(path2ServerFIFO);
+    printf("<Server> %s closed and removed from the filesystem\n", path2ServerFIFO);
 
     // Terminate the process
     _exit(0);

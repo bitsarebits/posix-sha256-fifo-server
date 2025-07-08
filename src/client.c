@@ -42,7 +42,7 @@ int main(int argc, char *argv[])
     atexit(quit_atexit);
 
     // Create the client FIFO in /tmp
-    char path2ClientFIFO[25];
+    char path2ClientFIFO[50];
     sprintf(path2ClientFIFO, "%s%d", baseClientFIFO, getpid());
 
     printf("<Client> Creating FIFO %s...\n", path2ClientFIFO);
@@ -98,6 +98,8 @@ int main(int argc, char *argv[])
     if (unlink(path2ClientFIFO) == -1)
         errExit("unlink: failed to remove client FIFO");
 
+    printf("<Client> %s closed and removed from the filesystem\n", path2ClientFIFO);
+
     return 0;
 }
 
@@ -105,8 +107,9 @@ int main(int argc, char *argv[])
 void quit(int sig)
 {
     // Remove the client FIFO from the file system (ignore errors if it does not exist)
-    char path2ClientFIFO[25];
+    char path2ClientFIFO[50];
     sprintf(path2ClientFIFO, "%s%d", baseClientFIFO, getpid());
+    printf("<Client> Closing the %s", path2ClientFIFO);
     unlink(path2ClientFIFO);
 
     // Terminate the process
