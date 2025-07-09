@@ -14,9 +14,9 @@
 
 #define CACHE_SIZE 1024
 
-// FIFO path for handling SHA256 requests from clients
+// Server and client FIFO paths
 char *path2ServerFIFO = "/tmp/fifo_server_SHA256";
-char *baseClientFIFO = "/tmp/fifo_client_SHA256."; // completed with the process ID
+char *baseClientFIFO = "/tmp/fifo_client_SHA256."; // Client FIFO format: base + PID
 
 // FIFO file descriptors
 int serverFIFO = -1;
@@ -25,19 +25,19 @@ int serverFIFO_extra = -1;
 // Node for the list of clients waiting for the same file hash
 typedef struct client_node
 {
-    pid_t pid;
-    struct client_node *next;
+    pid_t pid;                // Client process ID
+    struct client_node *next; // Next client in list
 } client_node_t;
 
-// Node for the request list
+// Request node for both pending and in-progress lists
 typedef struct request_list
 {
-    short errCode;
-    char pathname[PATH_MAX];
-    time_t last_mod_time;
-    size_t filesize;
-    client_node_t *clients;
-    struct request_list *next;
+    short errCode;             // Error code (0 if success)
+    char pathname[PATH_MAX];   // Requested file path
+    time_t last_mod_time;      // File modification time
+    size_t filesize;           // File size (for scheduling)
+    client_node_t *clients;    // List of waiting clients
+    struct request_list *next; // Next request in list
 } request_list_t;
 
 // Node for the cache table
@@ -54,58 +54,57 @@ request_list_t *request_list_head = NULL;
 pthread_mutex_t list_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t list_cond = PTHREAD_COND_INITIALIZER;
 
+// Initialize the in_progress list head, it will use the same mutex of the request list
+request_list_t *in_progress_list_head = NULL;
+
 // Initialize the cache table and the mutex
 cache_entry_t *cache[CACHE_SIZE] = {NULL};
 pthread_mutex_t cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// Function prototypes
+/* ========================== FUNCTION PROTOTYPES ========================== */
 
 /**
- * Insert a new request into the request list.
- * If a request for the same file (same path and mtime) already exists,
- * only add the client to the waiting clients list.
+ * Processes new client requests:
+ * - Searches in_progress and pending lists for duplicate requests
+ * - Adds new request to pending list (sorted by filesize)
+ * - Aggregates clients for same file requests
  */
 void update_request_list(struct Request *request);
 
 /**
- * Function executed by worker threads.
- * Takes requests from the list, computes SHA256, and sends the response to clients.
+ * Worker thread main function:
+ * - Takes requests from pending list
+ * - Moves them to in_progress list
+ * - Computes SHA256 (with cache check)
+ * - Sends responses to all waiting clients
  */
 void *worker_thread(void *arg);
 
 /**
- * Send a response calling fifo_client() for each client in req->clients.
- * Frees the request_list element and its client list memory after sending.
+ * Sends response to all clients waiting for a request:
+ * - Removes request from in_progress list
+ * - Sends response to each client via FIFO
+ * - Frees all allocated memory for the request
  */
 void send_response(request_list_t *req, struct Response *response);
+
+/**
+ * Computes SHA256 hash of specified file:
+ * - Handles file opening/reading errors
+ * - Returns appropriate error codes
+ */
+short digest_file(const char *filename, uint8_t *hash);
+
+/**
+ * Sends response to a single client via its FIFO
+ */
+void fifo_client(struct Response *response, pid_t cPid);
 
 /**
  * Frees all memory allocated for the hash cache.
  * Called during server termination.
  */
 void cache_cleanup(void);
-
-/**
- * Handles server termination: closes and removes the FIFO, terminates the process.
- */
-void quit(int sig);
-
-/**
- * Wrapper function for atexit to ensure cleanup on normal process termination.
- * Calls quit with a default signal value.
- */
-void quit_atexit(void);
-
-/**
- * Computes the SHA256 hash of a file and writes it to the hash array.
- * Returns an Error Code from request_response.h if something goes wrong, 0 on success.
- */
-short digest_file(const char *filename, uint8_t *hash);
-
-/**
- * Sends a Response to the client through its FIFO.
- */
-void fifo_client(struct Response *response, pid_t cPid);
 
 /**
  * Computes a hash value for a given pathname and mtime using the djb2 algorithm.
@@ -123,62 +122,73 @@ cache_entry_t *cache_lookup(const char *pathname, time_t mtime);
  */
 void cache_insert(const char *pathname, time_t mtime, const uint8_t *sha256);
 
+/**
+ * Handles server termination: closes and removes the FIFO, terminates the process.
+ */
+void quit(int sig);
+
+/**
+ * Wrapper function for atexit to ensure cleanup on normal process termination.
+ * Calls quit with a default signal value.
+ */
+void quit_atexit(void);
+
+/* ========================== MAIN IMPLEMENTATION ========================== */
+
 // Add a new request to the request list
 void update_request_list(struct Request *request)
 {
-    // Read file stats to get the last modification time
     struct stat st;
+    time_t mtime = 0;
+    size_t filesize = 0;
+    short errCode = 0;
+
+    // Read file stats to get the last modification time and filesize
     if (stat(request->pathname, &st) != 0)
     {
-
-        // Add an invalid element to the list with errCode STAT_E
-        request_list_t *new_req = malloc(sizeof(request_list_t));
-        if (!new_req)
-        {
-            printf("<Server> Malloc failed, client %d not served\n", request->cPid);
-            return;
-        }
-
-        client_node_t *new_client = malloc(sizeof(client_node_t));
-        if (!new_client)
-        {
-            printf("<Server> Malloc failed, client %d not served\n", request->cPid);
-            free(new_req);
-            return;
-        }
-
-        // Prepare the invalid node
-        new_req->errCode = STAT_E; // stat failed
-        strncpy(new_req->pathname, request->pathname, PATH_MAX);
-        new_req->filesize = 0; // will be first in the list
-        new_req->last_mod_time = 0;
-        new_client->pid = request->cPid;
-        new_client->next = NULL;
-        new_req->clients = new_client;
-
-        // Lock the mutex to synchronize with other threads
-        pthread_mutex_lock(&list_mutex);
-
-        // Insert the invalid request into the list, the worker will handle this
-        new_req->next = request_list_head;
-        request_list_head = new_req;
-        printf("<Server> Stat failed for %s\n", request->pathname);
-
-        // Wake up a worker thread, release the mutex and return
-        pthread_cond_signal(&list_cond);
-        pthread_mutex_unlock(&list_mutex);
-        return;
+        errCode = STAT_E;
+    }
+    else
+    {
+        mtime = st.st_mtime;
+        filesize = st.st_size;
     }
 
-    // Lock the mutex to synchronize with other threads
+    // Acquire the list mutex
     pthread_mutex_lock(&list_mutex);
 
+    // First check in_progress list for same file request
+    request_list_t *node = in_progress_list_head;
+    while (node)
+    {
+        if (strcmp(node->pathname, request->pathname) == 0 &&
+            node->last_mod_time == mtime)
+        {
+            // Path and mtime already in the list, add the client PID
+            // Only one thread will calculate the SHA256 and send to multiple clients
+            client_node_t *new_client = malloc(sizeof(client_node_t));
+            if (!new_client)
+            {
+                printf("<Server> Malloc failed, client %d not served\n", request->cPid);
+                pthread_mutex_unlock(&list_mutex);
+                return;
+            }
+            new_client->pid = request->cPid;
+            new_client->next = node->clients;
+            node->clients = new_client;
+            pthread_mutex_unlock(&list_mutex);
+            return;
+        }
+        node = node->next;
+    }
+
+    // If not found check or inserti in pending list
     request_list_t *prev = NULL, *curr = request_list_head;
 
     while (curr)
     {
         if (strcmp(curr->pathname, request->pathname) == 0 &&
-            curr->last_mod_time == st.st_mtime)
+            curr->last_mod_time == mtime)
         {
             // Path and mtime already in the list, add the client PID
             // Only one thread will calculate the SHA256 and send to multiple clients
@@ -197,7 +207,7 @@ void update_request_list(struct Request *request)
             pthread_mutex_unlock(&list_mutex);
             return;
         }
-        if (st.st_size < curr->filesize)
+        if (filesize < curr->filesize)
             break;
         prev = curr;
         curr = curr->next;
@@ -246,7 +256,7 @@ void update_request_list(struct Request *request)
 // uses cache to avoid recomputing SHA256
 void *worker_thread(void *arg)
 {
-    sleep(20);
+
     while (1)
     {
         // Acquire the list_mutex to access the request list
@@ -260,9 +270,14 @@ void *worker_thread(void *arg)
         request_list_t *req = request_list_head;
         request_list_head = request_list_head->next;
 
+        // Move the request to the in_progress list
+        req->next = in_progress_list_head;
+        in_progress_list_head = req;
+
         // Unlock the list_mutex
         pthread_mutex_unlock(&list_mutex);
 
+        // Check for errors, send an invalid response
         struct Response response;
         if (req->errCode != 0)
         {
@@ -318,9 +333,26 @@ void *worker_thread(void *arg)
     return NULL;
 }
 
-// Send the response to all waiting clients
+// Remove the request from the in_progress list and send the response to all waiting clients
 void send_response(request_list_t *req, struct Response *response)
 {
+
+    // Remove the request from the in_progress list
+    pthread_mutex_lock(&list_mutex);
+    if (in_progress_list_head == req)
+    {
+        in_progress_list_head = req->next;
+    }
+    else
+    {
+        request_list_t *prev = in_progress_list_head;
+        while (prev->next != req)
+            prev = prev->next;
+        prev->next = req->next;
+    }
+    pthread_mutex_unlock(&list_mutex);
+
+    // Send a response to all the clients
     client_node_t *clients = req->clients;
     while (clients)
     {
@@ -563,7 +595,7 @@ int main(int argc, char *argv[])
             printf("<Server> it looks like I did not receive a valid request\n");
         else
         {
-            printf("<Server> Received %s from %d\n", request.pathname, request.cPid);
+            printf("<Server> Received %s from client %d\n", request.pathname, request.cPid);
             update_request_list(&request);
         }
 

@@ -36,6 +36,8 @@ int main(int argc, char *argv[])
         printf("Usage: %s <pathname>\n", argv[0]);
         return 0;
     }
+    if (strlen(argv[1]) >= PATH_MAX)
+        errExit("Error: pathname too long (max 511 characters)\n");
 
     // Register cleanup functions for SIGINT and normal exit
     signal(SIGINT, quit);
@@ -67,6 +69,7 @@ int main(int argc, char *argv[])
 
     // Send the request through the server FIFO
     printf("<Client> Sending request for file: %s\n", request.pathname);
+    // struct Request is smaller than PIPE_BUF so read/write are atomic
     if (write(serverFIFO, &request, sizeof(request)) != sizeof(struct Request))
         errExit("write: failed to write request to server FIFO");
 

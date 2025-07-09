@@ -5,13 +5,17 @@ cd "$(dirname "$0")" || exit 1
 
 # Files to process
 files=(
-    "CMakeCache.txt"
+    "zoom_amd64.deb"
+    "zoom_amd64.deb"
+    "zoom_amd64.deb"
+    "zoom_amd64.deb"
+    "zoom_amd64.deb"
     "CMakeCache.txt"
     "CMakeCache.txt"
     "CMakeCache.txt"
     "Makefile"
     "Makefile"
-    "server"
+    "server"   
 )
 
 # Detect terminal emulator
