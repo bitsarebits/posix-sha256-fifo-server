@@ -9,7 +9,7 @@ void errExit(const char *msg)
     if (errno != 0)
         perror(msg);
 
-    else // avoid : success
+    else // avoid ": success"
         fprintf(stderr, "%s", msg);
 
     exit(EXIT_FAILURE);

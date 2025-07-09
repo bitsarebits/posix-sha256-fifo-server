@@ -51,7 +51,7 @@ int main(int argc, char *argv[])
     // // Create the FIFO with the following permissions:
     // user: read, write; group: write; other: no permission
     if (mkfifo(path2ClientFIFO, S_IRUSR | S_IWUSR | S_IWGRP) == -1)
-        errExit("mkfifo: failed to create client FIFO");
+        errExit("<Client> mkfifo: failed to create client FIFO");
 
     printf("<Client> FIFO %s created!\n", path2ClientFIFO);
 
@@ -59,7 +59,7 @@ int main(int argc, char *argv[])
     printf("<Client> Opening server FIFO %s...\n", path2ServerFIFO);
     int serverFIFO = open(path2ServerFIFO, O_WRONLY);
     if (serverFIFO == -1)
-        errExit("open: failed to open server FIFO");
+        errExit("<Client> open: failed to open server FIFO");
 
     // Prepare the request
     struct Request request;
@@ -71,35 +71,35 @@ int main(int argc, char *argv[])
     printf("<Client> Sending request for file: %s\n", request.pathname);
     // struct Request is smaller than PIPE_BUF so read/write are atomic
     if (write(serverFIFO, &request, sizeof(request)) != sizeof(struct Request))
-        errExit("write: failed to write request to server FIFO");
+        errExit("<Client> write: failed to write request to server FIFO");
 
     // Open the client FIFO to receive the response
     printf("<Client> Opening client FIFO %s...\n", path2ClientFIFO);
     int clientFIFO = open(path2ClientFIFO, O_RDONLY);
     if (clientFIFO == -1)
-        errExit("open: failed to open client FIFO");
+        errExit("<Client> open: failed to open client FIFO");
 
     // Read the response from the server
     struct Response response;
     if (read(clientFIFO, &response, sizeof(struct Response)) != sizeof(struct Response))
-        errExit("read: failed to read response from client FIFO");
+        errExit("<Client> read: failed to read response from client FIFO");
 
     if (response.errCode != 0 && response.errCode != CLOSE_FILE_E)
         errExit(get_error_message(response.errCode));
 
     // Print the result
-    printf("<Client> The SHA256 is: %s\n", response.hash);
+    printf("<Client> The SHA256 is:\n\n-->  %s  <--\n\n", response.hash);
 
     if (response.errCode == CLOSE_FILE_E)
         fprintf(stderr, "%s", get_error_message(response.errCode));
 
     // Close the client FIFO
     if (close(clientFIFO) == -1)
-        errExit("close: failed to close client FIFO");
+        errExit("<Client> close: failed to close client FIFO");
 
     // Remove the client FIFO from the file system
     if (unlink(path2ClientFIFO) == -1)
-        errExit("unlink: failed to remove client FIFO");
+        errExit("<Client> unlink: failed to remove client FIFO");
 
     printf("<Client> %s closed and removed from the filesystem\n", path2ClientFIFO);
 

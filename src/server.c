@@ -8,11 +8,13 @@
 #include <stdlib.h>
 #include <openssl/sha.h>
 #include <pthread.h>
+#include <errno.h>
 
 #include "errExit.h"
 #include "request_response.h"
 
 #define CACHE_SIZE 1024
+#define MAX_THREADS 64
 
 // Server and client FIFO paths
 char *path2ServerFIFO = "/tmp/fifo_server_SHA256";
@@ -60,6 +62,17 @@ request_list_t *in_progress_list_head = NULL;
 // Initialize the cache table and the mutex
 cache_entry_t *cache[CACHE_SIZE] = {NULL};
 pthread_mutex_t cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Create global threads and global variable for thread pool size
+pthread_t thread[MAX_THREADS];
+long thread_pool_size = 0;
+
+// atomic variable for threads termination
+volatile sig_atomic_t server_running = 1;
+
+// client counter
+pthread_mutex_t served_mutex = PTHREAD_MUTEX_INITIALIZER;
+long client_served = 0;
 
 /* ========================== FUNCTION PROTOTYPES ========================== */
 
@@ -256,15 +269,21 @@ void update_request_list(struct Request *request)
 // uses cache to avoid recomputing SHA256
 void *worker_thread(void *arg)
 {
-
-    while (1)
+    int hash_computed = 0; // counter for hash computed
+    while (server_running)
     {
         // Acquire the list_mutex to access the request list
         pthread_mutex_lock(&list_mutex);
 
         // If the list is empty, wait on the condition variable
-        while (!request_list_head)
+        while (!request_list_head && server_running)
             pthread_cond_wait(&list_cond, &list_mutex);
+
+        if (!server_running)
+        {
+            pthread_mutex_unlock(&list_mutex);
+            break; // terminate the thread function
+        }
 
         // take a request from the head of the list
         request_list_t *req = request_list_head;
@@ -309,6 +328,7 @@ void *worker_thread(void *arg)
             // Cache MISS: compute SHA256 and insert into cache
             printf("<Server> Worker %ld: cache MISS for %s, computing SHA256...\n", pthread_self(), req->pathname);
 
+            hash_computed++;
             response.errCode = digest_file(req->pathname, hash);
 
             if (response.errCode != 0 && response.errCode != CLOSE_FILE_E)
@@ -320,7 +340,7 @@ void *worker_thread(void *arg)
         }
 
         // Convert binary SHA256 to hex string
-        char char_hash[65];
+        char char_hash[65] = {0};
         for (int i = 0; i < 32; i++)
             sprintf(char_hash + (i * 2), "%02x", hash[i]);
 
@@ -330,6 +350,7 @@ void *worker_thread(void *arg)
         // Send the response to all waiting clients
         send_response(req, &response);
     }
+    printf("<Server> Worker %ld terminates, %d SHA256 hashes computed\n", pthread_self(), hash_computed);
     return NULL;
 }
 
@@ -386,20 +407,34 @@ void cache_cleanup()
 // Handles server termination: closes the FIFO descriptors, removes the FIFO, and exits the process
 void quit(int sig)
 {
+    // Shut down the server and terminate the threads
+    server_running = 0;
+    pthread_cond_broadcast(&list_cond);
+
+    for (int i = 0; i < thread_pool_size; i++)
+    {
+        if (pthread_join(thread[i], NULL) != 0)
+            perror("<Server> pthread_join failed");
+    }
+
+    printf("<Server> client served: %ld\n", client_served);
+
     // cleanup the cache
     printf("<Server> Cleanup the cache\n");
     cache_cleanup();
 
+    printf("<Server> Closing and removing FIFO %s...\n", path2ServerFIFO);
+
     // Close the FIFO descriptors
     if (serverFIFO != -1 && close(serverFIFO) == -1)
-        errExit("close failed");
+        perror("<Server> Close failed for server FIFO (read-side)\n");
 
     if (serverFIFO_extra != -1 && close(serverFIFO_extra) == -1)
-        errExit("close failed");
+        perror("<Server> Close failed for server FIFO (extra write-side)\n");
 
     // Remove FIFO from the filesystem (ignore errors if already removed)
-    unlink(path2ServerFIFO);
-    printf("<Server> %s closed and removed from the filesystem\n", path2ServerFIFO);
+    if (unlink(path2ServerFIFO) == -1 && errno != ENOENT)
+        perror("<Server> unlink failed for server FIFO\n");
 
     // Terminate the process
     _exit(0);
@@ -469,6 +504,12 @@ void fifo_client(struct Response *response, pid_t cPid)
     if (write(clientFIFO, response, sizeof(struct Response)) != sizeof(struct Response))
     {
         printf("<Server> Worker %ld: failed to write on client FIFO %s", pthread_self(), path2ClientFIFO);
+    }
+    else
+    {
+        pthread_mutex_lock(&served_mutex);
+        client_served++;
+        pthread_mutex_unlock(&served_mutex);
     }
 
     // Close the FIFO
@@ -546,7 +587,7 @@ int main(int argc, char *argv[])
     // Create the FIFO with the following permissions:
     // user: read, write; group: write; other: no permission
     if (mkfifo(path2ServerFIFO, S_IRUSR | S_IWUSR | S_IWGRP) == -1)
-        errExit("mkfifo: failed to create server FIFO");
+        errExit("<Server> mkfifo: failed to create server FIFO");
 
     printf("<Server> FIFO %s created!\n", path2ServerFIFO);
 
@@ -558,24 +599,27 @@ int main(int argc, char *argv[])
     printf("<Server> Waiting for a client connection...\n");
     serverFIFO = open(path2ServerFIFO, O_RDONLY);
     if (serverFIFO == -1)
-        errExit("open: failed to open server FIFO for reading");
+        errExit("<Server> open: failed to open server FIFO for reading");
 
     // Open an extra write descriptor to prevent EOF when all clients disconnect
     serverFIFO_extra = open(path2ServerFIFO, O_WRONLY);
     if (serverFIFO_extra == -1)
-        errExit("open: failed to open extra write descriptor for server FIFO");
+        errExit("<Server> open: failed to open extra write descriptor for server FIFO");
 
     // Calculate the thread pool size based on available CPU cores ( -1 for the thread manager)
-    long thread_pool_size = sysconf(_SC_NPROCESSORS_ONLN) - 1;
+    thread_pool_size = sysconf(_SC_NPROCESSORS_ONLN) - 1;
+    if (thread_pool_size >= MAX_THREADS)
+        thread_pool_size = MAX_THREADS - 1;
     if (thread_pool_size < 1)
         thread_pool_size = 1; // Minimum 1 worker thread
 
+    printf("<Server> Creating %ld worker threads", thread_pool_size);
+
     // Create the thread pool
-    pthread_t threads[thread_pool_size];
     for (int i = 0; i < thread_pool_size; i++)
     {
-        if (pthread_create(&threads[i], NULL, worker_thread, NULL) != 0)
-            errExit("pthread_create: failed to create worker thread");
+        if (pthread_create(&thread[i], NULL, worker_thread, NULL) != 0)
+            errExit("pthread_create: failed to create worker thread\n");
     }
 
     // Read requests from the FIFO and update the request list for worker threads
