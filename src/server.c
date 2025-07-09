@@ -71,8 +71,10 @@ long thread_pool_size = 0;
 volatile sig_atomic_t server_running = 1;
 
 // client counter
-pthread_mutex_t served_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t stats_mutex = PTHREAD_MUTEX_INITIALIZER;
 long client_served = 0;
+long cache_hits = 0;
+long cache_misses = 0;
 
 /* ========================== FUNCTION PROTOTYPES ========================== */
 
@@ -322,6 +324,9 @@ void *worker_thread(void *arg)
             // Cache HIT: reuse cached SHA256
             printf("<Server> Worker %ld: cache HIT for %s\n", pthread_self(), req->pathname);
             memcpy(hash, cached->sha256, 32);
+            pthread_mutex_lock(&stats_mutex);
+            cache_hits++;
+            pthread_mutex_unlock(&stats_mutex);
         }
         else
         {
@@ -337,6 +342,9 @@ void *worker_thread(void *arg)
                 continue;
             }
             cache_insert(req->pathname, req->last_mod_time, hash);
+            pthread_mutex_lock(&stats_mutex);
+            cache_misses++;
+            pthread_mutex_unlock(&stats_mutex);
         }
 
         // Convert binary SHA256 to hex string
@@ -418,6 +426,10 @@ void quit(int sig)
     }
 
     printf("<Server> client served: %ld\n", client_served);
+    printf("<Server> Cache stats: hits=%ld misses=%ld (%.2f%% hit rate)\n",
+           cache_hits, cache_misses,
+           (double)cache_hits / (cache_hits + cache_misses) * 100);
+    printf("<Server> Errors: %ld\n", client_served - (cache_hits + cache_misses));
 
     // cleanup the cache
     printf("<Server> Cleanup the cache\n");
@@ -507,9 +519,9 @@ void fifo_client(struct Response *response, pid_t cPid)
     }
     else
     {
-        pthread_mutex_lock(&served_mutex);
+        pthread_mutex_lock(&stats_mutex);
         client_served++;
-        pthread_mutex_unlock(&served_mutex);
+        pthread_mutex_unlock(&stats_mutex);
     }
 
     // Close the FIFO
