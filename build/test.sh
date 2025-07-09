@@ -8,14 +8,16 @@ files=(
     "zoom_amd64.deb"
     "zoom_amd64.deb"
     "zoom_amd64.deb"
-    "zoom_amd64.deb"
-    "zoom_amd64.deb"
     "CMakeCache.txt"
     "CMakeCache.txt"
     "CMakeCache.txt"
     "Makefile"
     "Makefile"
-    "server"   
+    "server"
+    "bigFile.bin"
+    "bigFile.bin"
+    "bigFile.bin"
+    "bigFile.bin"
 )
 
 # Detect terminal emulator
@@ -42,8 +44,6 @@ TERMINAL=$(detect_terminal)
 # Function to execute ./client on a single file in a new terminal
 run_client() {
     local filepath="$1"
-    echo "Launching ./client \"$filepath\" in a new terminal window..."
-
     case "$TERMINAL" in
         gnome-terminal)
             gnome-terminal -- bash -c "./client \"$filepath\"; echo ''; echo '✅ Done with $filepath. Press Enter to close...'; read"
@@ -73,16 +73,9 @@ run_client() {
     esac
 }
 
-# Main message
-echo "⚡ Expect only 3 threads to be created, one per distinct file."
-echo "📂 Order of processing based on file size: Makefile → CMakeCache.txt → server"
-echo "🚀 Launching ./client calls in separate terminals where possible..."
-echo
-
-# Run ./client for each file
+# Run ./client for each file in parallel
 for file in "${files[@]}"; do
     run_client "$file" &
 done
 
 wait
-echo "✅ All ./client calls have been launched and completed."

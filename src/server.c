@@ -429,7 +429,6 @@ void quit(int sig)
     printf("<Server> Cache stats: hits=%ld misses=%ld (%.2f%% hit rate)\n",
            cache_hits, cache_misses,
            (double)cache_hits / (cache_hits + cache_misses) * 100);
-    printf("<Server> Errors: %ld\n", client_served - (cache_hits + cache_misses));
 
     // cleanup the cache
     printf("<Server> Cleanup the cache\n");
@@ -625,7 +624,7 @@ int main(int argc, char *argv[])
     if (thread_pool_size < 1)
         thread_pool_size = 1; // Minimum 1 worker thread
 
-    printf("<Server> Creating %ld worker threads", thread_pool_size);
+    printf("<Server> Creating %ld worker threads\n", thread_pool_size);
 
     // Create the thread pool
     for (int i = 0; i < thread_pool_size; i++)
