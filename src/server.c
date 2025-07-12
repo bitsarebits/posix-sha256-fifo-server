@@ -358,7 +358,7 @@ void *worker_thread(void *arg)
         // Send the response to all waiting clients
         send_response(req, &response);
     }
-    printf("<Server> Worker %ld terminates, %d SHA256 hashes computed\n", pthread_self(), hash_computed);
+    printf("\n<Server> Worker %ld terminates, %d SHA256 hashes computed", pthread_self(), hash_computed);
     return NULL;
 }
 
@@ -425,7 +425,7 @@ void quit(int sig)
             perror("<Server> pthread_join failed");
     }
 
-    printf("<Server> client served: %ld\n", client_served);
+    printf("\n<Server> client served: %ld\n", client_served);
     printf("<Server> Cache stats: hits=%ld misses=%ld (%.2f%% hit rate)\n",
            cache_hits, cache_misses,
            (double)cache_hits / (cache_hits + cache_misses) * 100);
