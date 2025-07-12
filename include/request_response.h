@@ -6,7 +6,7 @@
 #define PATH_MAX 512 // max lenght of the pathname
 
 // Error codes
-#define STAT_E -1
+#define STAT_FILE_E -1
 #define OPEN_FILE_E -2
 #define READ_FILE_E -3
 #define CLOSE_FILE_E -4
@@ -20,7 +20,7 @@ typedef struct
 
 // Table with error messages
 static const error_entry_t error_table[] = {
-    {STAT_E, "Error: The server failed to retrieve file statistics\n"},
+    {STAT_FILE_E, "Error: The server failed to retrieve file statistics\n"},
     {OPEN_FILE_E, "Error: The server couldn't open the file\n"},
     {READ_FILE_E, "Error: The server couldn't read the file\n"},
     {CLOSE_FILE_E, "Error: The server couldn't close the file\n"},

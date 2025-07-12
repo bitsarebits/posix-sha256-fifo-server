@@ -161,7 +161,7 @@ void update_request_list(struct Request *request)
     // Read file stats to get the last modification time and filesize
     if (stat(request->pathname, &st) != 0)
     {
-        errCode = STAT_E;
+        errCode = STAT_FILE_E;
     }
     else
     {
@@ -606,17 +606,6 @@ int main(int argc, char *argv[])
     signal(SIGINT, quit);
     atexit(quit_atexit);
 
-    // Wait for clients: open the server FIFO in read-only mode
-    printf("<Server> Waiting for a client connection...\n");
-    serverFIFO = open(path2ServerFIFO, O_RDONLY);
-    if (serverFIFO == -1)
-        errExit("<Server> open: failed to open server FIFO for reading");
-
-    // Open an extra write descriptor to prevent EOF when all clients disconnect
-    serverFIFO_extra = open(path2ServerFIFO, O_WRONLY);
-    if (serverFIFO_extra == -1)
-        errExit("<Server> open: failed to open extra write descriptor for server FIFO");
-
     // Calculate the thread pool size based on available CPU cores ( -1 for the thread manager)
     thread_pool_size = sysconf(_SC_NPROCESSORS_ONLN) - 1;
     if (thread_pool_size >= MAX_THREADS)
@@ -632,6 +621,17 @@ int main(int argc, char *argv[])
         if (pthread_create(&thread[i], NULL, worker_thread, NULL) != 0)
             errExit("pthread_create: failed to create worker thread\n");
     }
+
+    // Wait for clients: open the server FIFO in read-only mode
+    printf("<Server> Waiting for a client connection...\n");
+    serverFIFO = open(path2ServerFIFO, O_RDONLY);
+    if (serverFIFO == -1)
+        errExit("<Server> open: failed to open server FIFO for reading");
+
+    // Open an extra write descriptor to prevent EOF when all clients disconnect
+    serverFIFO_extra = open(path2ServerFIFO, O_WRONLY);
+    if (serverFIFO_extra == -1)
+        errExit("<Server> open: failed to open extra write descriptor for server FIFO");
 
     // Read requests from the FIFO and update the request list for worker threads
     struct Request request;
