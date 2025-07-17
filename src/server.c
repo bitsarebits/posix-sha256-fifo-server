@@ -334,6 +334,10 @@ void *worker_thread(void *arg)
             printf("<Server> Worker %ld: cache MISS for %s, computing SHA256...\n", pthread_self(), req->pathname);
 
             hash_computed++;
+            pthread_mutex_lock(&stats_mutex);
+            cache_misses++;
+            pthread_mutex_unlock(&stats_mutex);
+
             response.errCode = digest_file(req->pathname, hash);
 
             if (response.errCode != 0 && response.errCode != CLOSE_FILE_E)
@@ -342,9 +346,6 @@ void *worker_thread(void *arg)
                 continue;
             }
             cache_insert(req->pathname, req->last_mod_time, hash);
-            pthread_mutex_lock(&stats_mutex);
-            cache_misses++;
-            pthread_mutex_unlock(&stats_mutex);
         }
 
         // Convert binary SHA256 to hex string
@@ -460,7 +461,7 @@ short digest_file(const char *filename, uint8_t *hash)
     SHA256_CTX ctx;
     SHA256_Init(&ctx);
 
-    char buffer[32];
+    char buffer[4096];
 
     int file = open(filename, O_RDONLY, 0);
     if (file == -1)
@@ -472,8 +473,8 @@ short digest_file(const char *filename, uint8_t *hash)
     ssize_t bR;
     do
     {
-        // read the file in chunks of 32 characters
-        bR = read(file, buffer, 32);
+        // read the file in chunks of 4 KB
+        bR = read(file, buffer, sizeof(buffer));
         if (bR > 0)
         {
             SHA256_Update(&ctx, (uint8_t *)buffer, bR);
@@ -481,6 +482,7 @@ short digest_file(const char *filename, uint8_t *hash)
         else if (bR < 0)
         {
             printf("<Server> Worker %ld: Can't read the file\n", pthread_self());
+            close(file);
             return READ_FILE_E;
         }
     } while (bR > 0);
@@ -499,7 +501,7 @@ short digest_file(const char *filename, uint8_t *hash)
 void fifo_client(struct Response *response, pid_t cPid)
 {
     // Build the path to the client's FIFO
-    char path2ClientFIFO[50];
+    char path2ClientFIFO[64];
     sprintf(path2ClientFIFO, "%s%d", baseClientFIFO, cPid);
 
     printf("<Server> Worker %ld: Sending a response to client PID %d...\n", pthread_self(), cPid);
@@ -602,8 +604,11 @@ int main(int argc, char *argv[])
 
     printf("<Server> FIFO %s created!\n", path2ServerFIFO);
 
-    // Set a signal handler for SIGINT and atexit to perform cleanup
+    // Set a signal handler for SIGINT, SIGTERM, SIGHUP, SIGQUIT and atexit to perform cleanup
     signal(SIGINT, quit);
+    signal(SIGTERM, quit);
+    signal(SIGHUP, quit);
+    signal(SIGQUIT, quit);
     atexit(quit_atexit);
 
     // Calculate the thread pool size based on available CPU cores ( -1 for the thread manager)

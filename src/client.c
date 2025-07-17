@@ -39,12 +39,15 @@ int main(int argc, char *argv[])
     if (strlen(argv[1]) >= PATH_MAX)
         errExit("Error: pathname too long (max 511 characters)\n");
 
-    // Register cleanup functions for SIGINT and normal exit
+    // Set a signal handler for SIGINT, SIGTERM, SIGHUP, SIGQUIT and atexit to perform cleanup
     signal(SIGINT, quit);
+    signal(SIGTERM, quit);
+    signal(SIGHUP, quit);
+    signal(SIGQUIT, quit);
     atexit(quit_atexit);
 
     // Create the client FIFO in /tmp
-    char path2ClientFIFO[50];
+    char path2ClientFIFO[64];
     sprintf(path2ClientFIFO, "%s%d", baseClientFIFO, getpid());
 
     printf("<Client> Creating FIFO %s...\n", path2ClientFIFO);

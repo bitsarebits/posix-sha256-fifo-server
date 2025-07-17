@@ -84,4 +84,5 @@ CMakeFiles/client.dir/src/client.c.o: \
  /usr/include/x86_64-linux-gnu/bits/sigthread.h \
  /usr/include/x86_64-linux-gnu/bits/signal_ext.h \
  /home/isaia/uni/Sistemi_Operativi/project/SHA256/include/request_response.h \
+ /usr/include/linux/limits.h \
  /home/isaia/uni/Sistemi_Operativi/project/SHA256/include/errExit.h

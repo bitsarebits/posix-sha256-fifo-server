@@ -2,8 +2,7 @@
 #define _REQUEST_RESPONSE_HH
 
 #include <sys/types.h>
-
-#define PATH_MAX 512 // max lenght of the pathname
+#include <linux/limits.h>
 
 // Error codes
 #define STAT_FILE_E -1

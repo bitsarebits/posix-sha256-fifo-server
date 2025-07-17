@@ -106,4 +106,5 @@ CMakeFiles/server.dir/src/server.c.o: \
  /usr/include/linux/errno.h /usr/include/x86_64-linux-gnu/asm/errno.h \
  /usr/include/asm-generic/errno.h /usr/include/asm-generic/errno-base.h \
  /home/isaia/uni/Sistemi_Operativi/project/SHA256/include/errExit.h \
- /home/isaia/uni/Sistemi_Operativi/project/SHA256/include/request_response.h
+ /home/isaia/uni/Sistemi_Operativi/project/SHA256/include/request_response.h \
+ /usr/include/linux/limits.h
