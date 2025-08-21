@@ -1,1 +1,0 @@
-/usr/bin/cc CMakeFiles/server.dir/src/server.c.o CMakeFiles/server.dir/src/errExit.c.o CMakeFiles/server.dir/src/request_response.c.o -o server  /usr/lib/x86_64-linux-gnu/libssl.so /usr/lib/x86_64-linux-gnu/libcrypto.so -lpthread 
