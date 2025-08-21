@@ -1,8 +1,13 @@
-#ifndef _REQUEST_RESPONSE_HH
-#define _REQUEST_RESPONSE_HH
+#ifndef REQUEST_RESPONSE_H
+#define REQUEST_RESPONSE_H
 
 #include <sys/types.h>
-#include <linux/limits.h>
+#include <limits.h>
+
+#ifndef PATH_MAX
+/* Fallback if PATH_MAX is not provided by the platform headers */
+#define PATH_MAX 4096
+#endif
 
 // Error codes
 #define STAT_FILE_E -1

@@ -501,7 +501,7 @@ short digest_file(const char *filename, uint8_t *hash)
 void fifo_client(struct Response *response, pid_t cPid)
 {
     // Build the path to the client's FIFO
-    char path2ClientFIFO[64];
+    char path2ClientFIFO[PATH_MAX];
     sprintf(path2ClientFIFO, "%s%d", baseClientFIFO, cPid);
 
     printf("<Server> Worker %ld: Sending a response to client PID %d...\n", pthread_self(), cPid);
